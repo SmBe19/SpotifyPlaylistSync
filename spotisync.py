@@ -4,10 +4,13 @@ import argparse
 import base64
 import configparser
 import json
+import os
 import re
 import requests
 import urllib
 import webbrowser
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 class Spotify:
 
