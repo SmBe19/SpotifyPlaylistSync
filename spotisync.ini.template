@@ -1,0 +1,13 @@
+[spotisync]
+clientid = <id>
+clientsecret = <secret>
+
+[syncs]
+src1 =
+dst1 = <dst1>
+src2 = <src2>
+dst2 = <dst2>
+
+[oauth]
+token =
+refresh_token =
