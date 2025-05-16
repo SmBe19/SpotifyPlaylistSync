@@ -101,11 +101,15 @@ class Spotify:
         self.set_tokens(token, refresh_token)
 
     def get_all_pages(self, r):
+        retries = 10
         r.raise_for_status()
         rj = r.json()
         items = rj['items']
         while rj['next']:
             r = requests.get(rj['next'], headers=self.get_auth_header())
+            if 400 <= r.status_code < 600 and retries > 0:
+                retries -= 1
+                continue
             r.raise_for_status()
             rj = r.json()
             items.extend(rj['items'])
@@ -116,8 +120,19 @@ class Spotify:
             'limit': 50
         }, headers=self.get_auth_header())
         lists = self.get_all_pages(r)
+        print("Playlists")
         for l in lists:
             print("{} - {}".format(l['id'], l['name']))
+        for search in ["Discover Weekly", "Dein Mix der Woche", "Release Radar"]:
+            print(search)
+            r = requests.get('https://api.spotify.com/v1/search?q={}&type=playlist'.format(search.replace(' ', '%20')), {
+                'limit': 50
+            }, headers=self.get_auth_header())
+            rj = r.json()
+            for l in rj['playlists']['items']:
+                if not l or l['owner']['display_name'] != 'Spotify':
+                    continue
+                print("{} - {}".format(l['id'], l['name']))
 
     def get_playlist_tracks(self, id):
         r = requests.get('https://api.spotify.com/v1/playlists/{}/tracks'.format(id), {
@@ -165,7 +180,10 @@ class Spotify:
     def synchronize_playlists(self):
         for key in self.config['syncs']:
             if key.startswith('src') and 'dst' + key[3:] in self.config['syncs']:
-                self.synchronize_playlist(self.config['syncs'][key], self.config['syncs']['dst' + key[3:]])
+                try:
+                    self.synchronize_playlist(self.config['syncs'][key], self.config['syncs']['dst' + key[3:]])
+                except Exception as e:
+                    print("Synchronizing playlists failed", e)
 
 
 def main():
