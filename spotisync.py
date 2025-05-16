@@ -101,7 +101,7 @@ class Spotify:
         self.set_tokens(token, refresh_token)
 
     def get_all_pages(self, r):
-        retries = 10
+        retries = 20
         r.raise_for_status()
         rj = r.json()
         items = rj['items']
@@ -133,6 +133,11 @@ class Spotify:
                 if not l or l['owner']['display_name'] != 'Spotify':
                     continue
                 print("{} - {}".format(l['id'], l['name']))
+    
+    def list_playlist(self, id):
+        tracks = self.get_playlist_tracks(id)
+        for track in tracks:
+            print("{} by {}".format(track['track']['name'], ",".join(artist['name'] for artist in track['track']['artists'])))
 
     def get_playlist_tracks(self, id):
         r = requests.get('https://api.spotify.com/v1/playlists/{}/tracks'.format(id), {
@@ -189,11 +194,14 @@ class Spotify:
 def main():
     parser = argparse.ArgumentParser(description="Synchronize Spotify Playlists")
     parser.add_argument('--playlists', action='store_true', help="list playlists")
+    parser.add_argument('--playlist', help="list tracks in playlist")
     args = parser.parse_args()
     s = Spotify()
     s.check_oauth()
     if args.playlists:
         s.list_playlists()
+    elif args.playlist:
+        s.list_playlist(args.playlist)
     else:
         s.synchronize_playlists()
 
