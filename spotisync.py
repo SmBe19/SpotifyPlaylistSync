@@ -7,10 +7,15 @@ import json
 import os
 import re
 import requests
+import sys
+import traceback
 import urllib
 import webbrowser
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
 
 class Spotify:
 
@@ -28,10 +33,17 @@ class Spotify:
                 self.data = json.load(f)
         except FileNotFoundError:
             self.data = {}
+        try:
+            with open('spotisync_tracks.dat') as f:
+                self.track_data = json.load(f)
+        except FileNotFoundError:
+            self.track_data = {}
 
     def save_data(self):
         with open('spotisync.dat', 'w') as f:
             json.dump(self.data, f)
+        with open('spotisync_tracks.dat', 'w') as f:
+            json.dump(self.track_data, f)
 
     def load_tokens(self):
         try:
@@ -60,10 +72,13 @@ class Spotify:
             self.config.write(f)
 
     def check_oauth(self):
-        if not self.refresh_token:
-            self.do_oauth()
-        else:
-            self.do_refresh_token()
+        if self.refresh_token:
+            try:
+                self.do_refresh_token()
+                return
+            except Exception as e:
+                eprint("Refreshing token failed", e)
+        self.do_oauth()
 
     def do_refresh_token(self):
         r = requests.post('https://accounts.spotify.com/api/token', {
@@ -86,7 +101,7 @@ class Spotify:
         url = 'https://accounts.spotify.com/authorize?' + query
         webbrowser.open(url)
         code = input("Give me code:")
-        m = re.match('http://127.0.0.1:65010/authorize_callback\?code=([^&]*)&state=whatev', code)
+        m = re.match('http://127.0.0.1:65010/authorize_callback\\?code=([^&]*)&state=whatev', code)
         if m:
             code = m.group(1)
         r = requests.post('https://accounts.spotify.com/api/token', {
@@ -123,24 +138,42 @@ class Spotify:
         print("Playlists")
         for l in lists:
             print("{} - {}".format(l['id'], l['name']))
-        for search in ["Discover Weekly", "Dein Mix der Woche", "Release Radar"]:
-            print(search)
-            r = requests.get('https://api.spotify.com/v1/search?q={}&type=playlist'.format(search.replace(' ', '%20')), {
-                'limit': 50
-            }, headers=self.get_auth_header())
-            rj = r.json()
-            for l in rj['playlists']['items']:
-                if not l or l['owner']['display_name'] != 'Spotify':
-                    continue
-                print("{} - {}".format(l['id'], l['name']))
+
+    def extract_track_data(self, track):
+        item = track['item']
+        album = item['album']
+        return {
+            'id': item['id'],
+            'name': item['name'],
+            'duration_ms': item['duration_ms'],
+            'external_ids': item['external_ids'],
+            'disc_number': item['disc_number'],
+            'track_number': item['track_number'],
+            'album': {
+                'id': album['id'],
+                'name': album['name'],
+                'release_date': album['release_date'],
+                'artists': [{
+                    'id': artist['id'],
+                    'name': artist['name'],
+                } for artist in album['artists']]
+            },
+            'artists': [{
+                'id': artist['id'],
+                'name': artist['name'],
+            } for artist in album['artists']]
+        }
     
     def list_playlist(self, id):
+        r = requests.get('https://api.spotify.com/v1/playlists/{}'.format(id), headers=self.get_auth_header())
+        list_meta = r.json()
+        print("Playlist {} - {} by {}".format(list_meta['id'], list_meta['name'], list_meta['owner']['display_name']))
         tracks = self.get_playlist_tracks(id)
         for track in tracks:
-            print("{} by {}".format(track['track']['name'], ",".join(artist['name'] for artist in track['track']['artists'])))
+            print("{} by {}".format(track['item']['name'], ",".join(artist['name'] for artist in track['item']['artists'])))
 
     def get_playlist_tracks(self, id):
-        r = requests.get('https://api.spotify.com/v1/playlists/{}/tracks'.format(id), {
+        r = requests.get('https://api.spotify.com/v1/playlists/{}/items'.format(id), {
             'limit': 50
         }, headers=self.get_auth_header())
         return self.get_all_pages(r)
@@ -151,7 +184,7 @@ class Spotify:
 
     def playlist_contains(self, tracks, id):
         for track in tracks:
-            if id == track['track']['id']:
+            if id == track['item']['id']:
                 return True
         return False
 
@@ -161,24 +194,27 @@ class Spotify:
         k = src + '#' + dst
         if k not in self.data:
             self.data[k] = []
-        synced = self.data[k]
+        synced = set(self.data[k])
         to_add = []
         if not src:
             src_tracks = src_tracks[::-1]
         for track in src_tracks:
-            id = track['track']['id']
+            if 'item' not in track:
+                track['item'] = track['track']
+            id = track['item']['id']
+            self.track_data[id] = self.extract_track_data(track)
             if id not in synced:
-                synced.append(id)
+                synced.add(id)
                 if self.playlist_contains(dst_tracks, id):
                     continue
-                to_add.append(track['track']['uri'])
+                to_add.append(track['item']['uri'])
         for st in range(0, len(to_add), 100):
-            r = requests.post('https://api.spotify.com/v1/playlists/{}/tracks'.format(dst), json={
+            r = requests.post('https://api.spotify.com/v1/playlists/{}/items'.format(dst), json={
                 'uris': to_add[st:min(st+100, len(to_add))]
             }, headers=self.get_auth_header())
             r.raise_for_status()
 
-        self.data[k] = synced
+        self.data[k] = list(synced)
         self.save_data()
         print("Synced {} tracks".format(len(to_add)))
 
@@ -188,7 +224,8 @@ class Spotify:
                 try:
                     self.synchronize_playlist(self.config['syncs'][key], self.config['syncs']['dst' + key[3:]])
                 except Exception as e:
-                    print("Synchronizing playlists failed", e)
+                    eprint("Synchronizing playlists failed", e)
+                    eprint(traceback.format_exc())
 
 
 def main():
